@@ -1,15 +1,19 @@
-# -*- coding: utf-8 -*-
-import django.dispatch
+from django.dispatch import Signal
 from django.db import connections
+
 from background_task.settings import app_settings
 
-task_created = django.dispatch.Signal(providing_args=['task'])
-task_error = django.dispatch.Signal(providing_args=['task'])
-task_rescheduled = django.dispatch.Signal(providing_args=['task'])
-task_failed = django.dispatch.Signal(providing_args=['task_id', 'completed_task'])
-task_successful = django.dispatch.Signal(providing_args=['task_id', 'completed_task'])
-task_started = django.dispatch.Signal()
-task_finished = django.dispatch.Signal()
+# Those signals provide the related task as the `task` argument
+task_created = Signal()
+task_error = Signal()
+task_rescheduled = Signal()
+
+# Those signals provide the related `task_id` and `completed_task` as arguments
+task_failed = Signal()
+task_successful = Signal()
+
+task_started = Signal()
+task_finished = Signal()
 
 
 # Register an event to reset saved queries when a Task is started.
@@ -22,8 +26,7 @@ def reset_queries(**kwargs):
 task_started.connect(reset_queries)
 
 
-# Register an event to reset transaction state and close connections past
-# their lifetime.
+# Register an event to reset transaction state and close connections past their lifetime
 def close_old_connections(**kwargs):
     if app_settings.BACKGROUND_TASK_RUN_ASYNC:
         for conn in connections.all():

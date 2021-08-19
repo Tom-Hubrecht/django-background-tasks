@@ -1,21 +1,17 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
-from datetime import datetime, timedelta
-from importlib import import_module
-from multiprocessing.pool import ThreadPool
 import logging
 import os
 import sys
+from datetime import datetime, timedelta
+from importlib import import_module
+from multiprocessing.pool import ThreadPool
 
 from django.db.utils import OperationalError
 from django.utils import timezone
-from six import python_2_unicode_compatible
 
+from background_task import signals
 from background_task.exceptions import BackgroundTaskError
 from background_task.models import Task
 from background_task.settings import app_settings
-from background_task import signals
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +19,20 @@ logger = logging.getLogger(__name__)
 def bg_runner(proxy_task, task=None, *args, **kwargs):
     """
     Executes the function attached to task. Used to enable threads.
-    If a Task instance is provided, args and kwargs are ignored and retrieved from the Task itself.
+    If a Task instance is provided, args and kwargs are ignored and retrieved from
+    the Task itself.
     """
     signals.task_started.send(Task)
     try:
-        func = getattr(proxy_task, 'task_function', None)
+        func = getattr(proxy_task, "task_function", None)
         if isinstance(task, Task):
             args, kwargs = task.params()
         else:
-            task_name = getattr(proxy_task, 'name', None)
-            task_queue = getattr(proxy_task, 'queue', None)
-            task_qs = Task.objects.get_task(task_name=task_name, args=args, kwargs=kwargs)
+            task_name = getattr(proxy_task, "name", None)
+            task_queue = getattr(proxy_task, "queue", None)
+            task_qs = Task.objects.get_task(
+                task_name=task_name, args=args, kwargs=kwargs
+            )
             if task_queue:
                 task_qs = task_qs.filter(queue=task_queue)
             if task_qs:
@@ -46,15 +45,17 @@ def bg_runner(proxy_task, task=None, *args, **kwargs):
             # task done, so can delete it
             task.increment_attempts()
             completed = task.create_completed_task()
-            signals.task_successful.send(sender=task.__class__, task_id=task.id, completed_task=completed)
+            signals.task_successful.send(
+                sender=task.__class__, task_id=task.id, completed_task=completed
+            )
             task.create_repetition()
             task.delete()
-            logger.info('Ran task and deleting %s', task)
+            logger.info("Ran task and deleting %s", task)
 
     except Exception as ex:
         t, e, traceback = sys.exc_info()
         if task:
-            logger.error('Rescheduling %s', task, exc_info=(t, e, traceback))
+            logger.error("Rescheduling %s", task, exc_info=(t, e, traceback))
             signals.task_error.send(sender=ex.__class__, task=task)
             task.reschedule(t, e, traceback)
         del traceback
@@ -75,7 +76,9 @@ class PoolRunner:
         return self._pool_instance
 
     def run(self, proxy_task, task=None, *args, **kwargs):
-        self._pool.apply_async(func=self._bg_runner, args=(proxy_task, task) + tuple(args), kwds=kwargs)
+        self._pool.apply_async(
+            func=self._bg_runner, args=(proxy_task, task) + tuple(args), kwds=kwargs
+        )
 
     __call__ = run
 
@@ -86,15 +89,18 @@ class Tasks(object):
         self._runner = DBTaskRunner()
         self._task_proxy_class = TaskProxy
         self._bg_runner = bg_runner
-        self._pool_runner = PoolRunner(bg_runner, app_settings.BACKGROUND_TASK_ASYNC_THREADS)
+        self._pool_runner = PoolRunner(
+            bg_runner, app_settings.BACKGROUND_TASK_ASYNC_THREADS
+        )
 
-    def background(self, name=None, schedule=None, queue=None,
-                   remove_existing_tasks=False):
-        '''
+    def background(
+        self, name=None, schedule=None, queue=None, remove_existing_tasks=False
+    ):
+        """
         decorator to turn a regular function into
         something that gets run asynchronously in
         the background, at a later time
-        '''
+        """
 
         # see if used as simple decorator
         # where first arg is the function to be decorated
@@ -106,11 +112,13 @@ class Tasks(object):
         def _decorator(fn):
             _name = name
             if not _name:
-                _name = '%s.%s' % (fn.__module__, fn.__name__)
-            proxy = self._task_proxy_class(_name, fn, schedule, queue,
-                                           remove_existing_tasks, self._runner)
+                _name = "%s.%s" % (fn.__module__, fn.__name__)
+            proxy = self._task_proxy_class(
+                _name, fn, schedule, queue, remove_existing_tasks, self._runner
+            )
             self._tasks[_name] = proxy
             return proxy
+
         if fn:
             return _decorator(fn)
 
@@ -159,16 +167,16 @@ class TaskSchedule(object):
             if isinstance(schedule, (int, timedelta, datetime)):
                 run_at = schedule
             else:
-                run_at = schedule.get('run_at', None)
-                priority = schedule.get('priority', None)
-                action = schedule.get('action', None)
+                run_at = schedule.get("run_at", None)
+                priority = schedule.get("priority", None)
+                action = schedule.get("action", None)
 
         return TaskSchedule(run_at=run_at, priority=priority, action=action)
 
     def merge(self, schedule):
         params = {}
-        for name in ['run_at', 'priority', 'action']:
-            attr_name = '_%s' % name
+        for name in ["run_at", "priority", "action"]:
+            attr_name = "_%s" % name
             value = getattr(self, attr_name, None)
             if value is None:
                 params[name] = getattr(schedule, attr_name, None)
@@ -193,34 +201,55 @@ class TaskSchedule(object):
     def action(self):
         return self._action or TaskSchedule.SCHEDULE
 
-
     def __repr__(self):
-        return 'TaskSchedule(run_at=%s, priority=%s)' % (self._run_at,
-                                                         self._priority)
+        return "TaskSchedule(run_at=%s, priority=%s)" % (self._run_at, self._priority)
 
     def __eq__(self, other):
-        return self._run_at == other._run_at \
-           and self._priority == other._priority \
-           and self._action == other._action
+        return (
+            self._run_at == other._run_at
+            and self._priority == other._priority
+            and self._action == other._action
+        )
 
 
 class DBTaskRunner(object):
-    '''
+    """
     Encapsulate the model related logic in here, in case
     we want to support different queues in the future
-    '''
+    """
 
     def __init__(self):
         self.worker_name = str(os.getpid())
 
-    def schedule(self, task_name, args, kwargs, run_at=None,
-                 priority=0, action=TaskSchedule.SCHEDULE, queue=None,
-                 verbose_name=None, creator=None,
-                 repeat=None, repeat_until=None, remove_existing_tasks=False):
-        '''Simply create a task object in the database'''
-        task = Task.objects.new_task(task_name, args, kwargs, run_at, priority,
-                                     queue, verbose_name, creator, repeat,
-                                     repeat_until, remove_existing_tasks)
+    def schedule(
+        self,
+        task_name,
+        args,
+        kwargs,
+        run_at=None,
+        priority=0,
+        action=TaskSchedule.SCHEDULE,
+        queue=None,
+        verbose_name=None,
+        creator=None,
+        repeat=None,
+        repeat_until=None,
+        remove_existing_tasks=False,
+    ):
+        """Simply create a task object in the database"""
+        task = Task.objects.new_task(
+            task_name,
+            args,
+            kwargs,
+            run_at,
+            priority,
+            queue,
+            verbose_name,
+            creator,
+            repeat,
+            repeat_until,
+            remove_existing_tasks,
+        )
         if action != TaskSchedule.SCHEDULE:
             task_hash = task.task_hash
             now = timezone.now()
@@ -242,8 +271,11 @@ class DBTaskRunner(object):
 
     def get_task_to_run(self, tasks, queue=None):
         try:
-            available_tasks = [task for task in Task.objects.find_available(queue)
-                               if task.task_name in tasks._tasks][:5]
+            available_tasks = [
+                task
+                for task in Task.objects.find_available(queue)
+                if task.task_name in tasks._tasks
+            ][:5]
             for task in available_tasks:
                 # try to lock task
                 locked_task = task.lock(self.worker_name)
@@ -251,10 +283,10 @@ class DBTaskRunner(object):
                     return locked_task
             return None
         except OperationalError:
-            logger.warning('Failed to retrieve tasks. Database unreachable.')
+            logger.warning("Failed to retrieve tasks. Database unreachable.")
 
     def run_task(self, tasks, task):
-        logger.info('Running %s', task)
+        logger.info("Running %s", task)
         tasks.run_task(task)
 
     def run_next_task(self, tasks, queue=None):
@@ -266,9 +298,10 @@ class DBTaskRunner(object):
             return False
 
 
-@python_2_unicode_compatible
 class TaskProxy(object):
-    def __init__(self, name, task_function, schedule, queue, remove_existing_tasks, runner):
+    def __init__(
+        self, name, task_function, schedule, queue, remove_existing_tasks, runner
+    ):
         self.name = name
         self.now = self.task_function = task_function
         self.runner = runner
@@ -276,27 +309,39 @@ class TaskProxy(object):
         self.queue = queue
         self.remove_existing_tasks = remove_existing_tasks
 
-
     def __call__(self, *args, **kwargs):
-        schedule = kwargs.pop('schedule', None)
+        schedule = kwargs.pop("schedule", None)
         schedule = TaskSchedule.create(schedule).merge(self.schedule)
         run_at = schedule.run_at
-        priority = kwargs.pop('priority', schedule.priority)
+        priority = kwargs.pop("priority", schedule.priority)
         action = schedule.action
-        queue = kwargs.pop('queue', self.queue)
-        verbose_name = kwargs.pop('verbose_name', None)
-        creator = kwargs.pop('creator', None)
-        repeat = kwargs.pop('repeat', None)
-        repeat_until = kwargs.pop('repeat_until', None)
-        remove_existing_tasks =  kwargs.pop('remove_existing_tasks', self.remove_existing_tasks)
+        queue = kwargs.pop("queue", self.queue)
+        verbose_name = kwargs.pop("verbose_name", None)
+        creator = kwargs.pop("creator", None)
+        repeat = kwargs.pop("repeat", None)
+        repeat_until = kwargs.pop("repeat_until", None)
+        remove_existing_tasks = kwargs.pop(
+            "remove_existing_tasks", self.remove_existing_tasks
+        )
 
-        return self.runner.schedule(self.name, args, kwargs, run_at, priority,
-                                    action, queue, verbose_name, creator,
-                                    repeat, repeat_until,
-                                    remove_existing_tasks)
+        return self.runner.schedule(
+            self.name,
+            args,
+            kwargs,
+            run_at,
+            priority,
+            action,
+            queue,
+            verbose_name,
+            creator,
+            repeat,
+            repeat_until,
+            remove_existing_tasks,
+        )
 
     def __str__(self):
-        return 'TaskProxy(%s)' % self.name
+        return "TaskProxy(%s)" % self.name
+
 
 tasks = Tasks()
 
@@ -306,6 +351,7 @@ def autodiscover():
     Autodiscover tasks.py files in much the same way as admin app
     """
     import imp
+
     from django.conf import settings
 
     for app in settings.INSTALLED_APPS:
@@ -314,7 +360,7 @@ def autodiscover():
         except (AttributeError, ImportError):
             continue
         try:
-            imp.find_module('tasks', app_path)
+            imp.find_module("tasks", app_path)
         except ImportError:
             continue
 
